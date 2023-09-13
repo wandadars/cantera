@@ -205,6 +205,12 @@ public:
     double thermalExpansionCoeff() const override;
     double soundSpeed() const override;
 
+    // Expose the Peng-Robinson parameters
+    double get_aAlpha() const;
+    double get_b() const;
+    double get_daAlpha_dT() const;
+    double get_d2aAlpha_dT2() const;
+
     //! Calculate @f$ dp/dV @f$ and @f$ dp/dT @f$ at the current conditions
     /*!
      *  These are stored internally.

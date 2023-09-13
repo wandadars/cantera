@@ -653,6 +653,24 @@ void PengRobinson::calculatePressureDerivatives() const
     m_dpdT = (GasConstant / vmb - daAlpha_dT() / denom);
 }
 
+// Expose the Peng-Robinson parameters
+    double PengRobinson::get_aAlpha() const
+    {
+        return m_aAlpha_mix;
+    }
+    double PengRobinson::get_b() const
+    {
+        return m_b;
+    }
+    double PengRobinson::get_daAlpha_dT() const
+    {
+        return daAlpha_dT();
+    }
+    double PengRobinson::get_d2aAlpha_dT2() const
+    {
+        return d2aAlpha_dT2();
+    }
+
 void PengRobinson::updateMixingExpressions()
 {
     double temp = temperature();
