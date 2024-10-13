@@ -511,13 +511,6 @@ class TestIAPWS95WaterTransport:
         assert water.thermal_conductivity == approx(k, rel=rtol)
 
 
-@pytest.fixture(scope='function')
-def setup_transport_data(request):
-    # Create instance-level data for each test
-    request.cls.gas = ct.Solution("h2o2.yaml")
-    request.cls.gas.X = 'H2O:0.6, H2:0.4'
-
-@pytest.mark.usefixtures("setup_transport_data")
 class TestTransportData:
 
     @pytest.fixture(scope='class')
@@ -526,7 +519,7 @@ class TestTransportData:
         return gas
 
     @pytest.fixture(scope='function', autouse=True)
-    def initial_conditon(self, gas):
+    def initial_condition(self, gas):
         gas.X = 'H2O:0.6, H2:0.4'
 
     def test_read(self, gas):
