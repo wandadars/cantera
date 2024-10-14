@@ -240,8 +240,8 @@ void Refiner::show()
 int Refiner::getNewGrid(int n, const double* z, int nn, double* zn)
 {
     warn_deprecated(
-    "Refiner::getNewGrid",
-    "Deprecated in Cantera 3.1; unsed function that will be removed.");
+        "Refiner::getNewGrid",
+        "Deprecated in Cantera 3.1; unused function that will be removed.");
 
     int nnew = static_cast<int>(m_insertPts.size());
     if (nnew + n > nn) {
