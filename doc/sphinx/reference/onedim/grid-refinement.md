@@ -6,11 +6,8 @@ The Cantera 1D solver uses a progressive mesh refinement strategy when solving t
 governing equations. The system is initially solved on a coarse grid, and then the
 solution is analyzed to identify regions where it is not well resolved, such as areas
 with steep gradients. Additional grid points are inserted in these regions and then
-the system is solved again. If too many points are inserted, the solver may have
-difficulty converging, and so the algorithm prevents itself from adding too many points
-during one refinement step. These additional points are added during subsequent
-refinement steps. This process is repeated until the solution is deemed to be well
-resolved. This incremental refinement procedure maximizes the probability that the
+the system is solved again. This process is repeated until the solution is deemed to be
+well resolved. This incremental refinement procedure maximizes the probability that the
 initial guess for each subsequent refined solution lies within the domain of
 convergence of the Newton solver.
 
@@ -190,14 +187,12 @@ right of the point under consideration.
 ### Prune
 
 This refinement option works in contrast to the other refinement options. Instead of
-adding grid points, this option removes grid points that are not needed. This option
-lets a user specify a value of the ratio quantities described above that if the ratio
-drops below this, then the point is removed. The user specifies a pruning value,
-$ \delta $, and that serves as a lower-bound on the ratio quantities.
-
-$$
-  \delta = \beta_{min} = \gamma_{min}
-$$
+adding grid points, this option removes grid points that are not needed. The pruning
+parameter helps the grid refinement algorithm identify areas where the grid may be
+overly refined. You specify a pruning value $ \delta $ that serves as a lower-bound on
+the ratio quantities. This helps prevent unnecessary grid refinement by
+removing points that are not needed, optimizing computational efficiency without
+sacrificing the accuracy of the solution.
 
 The following criteria are used to decide if a point is marked for removal.
 
@@ -209,16 +204,22 @@ $$
 If $ \frac{\beta_j}{\beta_{max}} $, or $ \frac{\gamma_j}{\gamma_{max}} $ are less
 than $ \delta $, then the point is marked for removal.
 
-As a general guideline, once you've set your slope and curve parameters to appropriate
-levels for your problem, the calculated ratios (from the refinement criteria) will be
-around 1.0 at grid points where the solution is just sufficiently resolved—that is, the
-grid points are "good enough" for capturing the solution accurately. Ratios less than
-1.0 indicate that the grid is finer than necessary at those points, potentially
-introducing more grid points than needed.
+For example, consider a case where the slope refinement criteria is set to 0.5, we
+can look at the pruning criteria as $$ \beta_j < \beta_{max} \delta $$. In this form
+it is easy to see that the pruning parameter defines "What fraction of the original
+$\beta_{max}$ is acceptable enough to remove a point?" Continuing with this example,
+consider a case where the refinement has progressed such that these are the values of
+the $$ \beta_j $$ at each point in a domain with 10 grid points.
 
-The prune parameter allows you to set a lower threshold for these ratios. By specifying
-a prune value, you help the grid refinement algorithm identify areas where the grid may
-be overly refined. If the ratio at a point drops below this prune value, the algorithm
-marks that point for removal. This helps prevent unnecessary grid refinement by
-removing points that are not needed, optimizing computational efficiency without
-sacrificing the accuracy of your solution.
+$$
+  \beta_j = [0.11, 0.16, 0.05, 0.1, 0.22, 0.09, 0.05, 0.02, 0.37, 0.29]
+$$
+
+All of the values are below the original $$ \beta_{max} $$ of 0.5, but some are much
+lower than that threshold. If the pruning parameter is set to a value of 0.2, then
+the effective cutoff threshold for removing a point would be 0.5*0.2 = 0.1. With this
+pruning criteria, the pruned data would be:
+
+$$
+  \beta_j = [0.11, 0.16, 0.1, 0.22, 0.37, 0.29]
+$$
