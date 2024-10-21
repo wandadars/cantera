@@ -853,14 +853,6 @@ protected:
     Kinetics* m_kin = nullptr;
     Transport* m_trans = nullptr;
 
-    // boundary emissivities for the radiation calculations
-    double m_epsilon_left = 0.0;
-    double m_epsilon_right = 0.0;
-
-    //! Indices within the ThermoPhase of the radiating species. First index is
-    //! for CO2, second is for H2O.
-    vector<size_t> m_kRadiating;
-
     // flags
     vector<bool> m_do_energy;
     bool m_do_soret = false;
@@ -873,6 +865,18 @@ protected:
 
     //! radiative heat loss vector
     vector<double> m_qdotRadiation;
+
+    // boundary emissivities for the radiation calculations
+    double m_epsilon_left = 0.0;
+    double m_epsilon_right = 0.0;
+
+    //! Indices within the ThermoPhase of the radiating species. First index is
+    //! for CO2, second is for H2O.
+    std::map<std::string, int> AbsorptionSpeciesMap;
+    std::vector<std::string> AbsorptionSpeciesList;
+    std::map<std::string, std::vector<double>> TemperatureOPLMap;
+    std::map<std::string, std::vector<double>> PlanckOPLMap;
+    vector<size_t> m_kRadiating;
 
     // fixed T and Y values
     vector<double> m_fixedtemp;

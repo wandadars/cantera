@@ -10,6 +10,8 @@
 #include "cantera/transport/TransportFactory.h"
 #include "cantera/numerics/funcs.h"
 #include "cantera/base/global.h"
+#include "cantera/thermo/Species.h"
+
 
 using namespace std;
 
@@ -88,6 +90,61 @@ Flow1D::Flow1D(ThermoPhase* ph, size_t nsp, size_t points) :
     m_kRadiating.resize(2, npos);
     m_kRadiating[0] = m_thermo->speciesIndex("CO2");
     m_kRadiating[1] = m_thermo->speciesIndex("H2O");
+
+    // We build this list from the YAML input file species section
+    // based on which species have absorption coefficients defined.
+    /* The data format would be something like this:
+    radiation:
+        model: RADCAL
+        temperatures: [200.0, 300.0, 400.0, 500.0, 600.0,
+            700.0, 800.0, 900.0, 1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0,
+            1700.0, 1800.0, 1900.0, 2000.0, 2100.0, 2200.0, 2300.0, 2400.0, 2500.0, 2600.0,
+            2700.0, 2800.0, 2900.0, 3000.0, 3100.0, 3200.0, 3300.0, 3400.0, 3500.0]
+        data: [0.028819231725166233, 0.03851088876725997,
+            0.03899126980906671, 0.032980228203593136, 0.030267348946179023, 0.030743052568319492,
+            0.03349552664432657, 0.03815025367862556, 0.044695166534542856, 0.0533451125340091,
+            0.06448815851162609, 0.07867018394357354, 0.09659983965382253, 0.11916430710589461,
+            0.14745252150882412, 0.18278437065235484, 0.22674394556072777, 0.2812154755687562,
+            0.34842470656989205, 0.43098095501152517, 0.5319261720083194, 0.6547800464563425,
+            0.8035960044763693, 0.983014582040391, 1.1983144211620795, 1.4554774859486679,
+            1.7612497326430492, 2.123189910047587, 2.549740894200347, 3.050301729813575,
+            3.6352339058247307, 4.316015725482628, 5.1051815487411565, 6.016472443851096]
+        note: Nth order polynomial fit from blah blah blah
+    */
+
+    for (auto& name : m_thermo->speciesNames()) {
+        auto& data = m_thermo->species(name)->input;
+        if (data.hasKey("radiation")) {
+            AbsorptionSpeciesList.push_back(name);
+            if (data["radiation"].hasKey("temperatures")) {
+                // Here is where we get the temperature values for the species based on the data from
+                // the YAMl file. Each species will have a specific set of temperatures that are used,
+                // so this should be a map of vectors of doubles.
+                TemperatureOPLMap[name] = data["radiation"]["temperatures"].asVector<double>();
+            } else {
+                throw InputFileError("Flow1D::Flow1D", data,
+                "No temperature entry found species '{}'", name);
+            }
+            if (data.hasKey("data")) {
+                // Each species section with the "radiation" section will have a temperature list,
+                // and a section called "data", which are polynomial coefficients for the Optical
+                // Path Length (OPL) of that species over the given temperature range. This data is
+                // stored in the PlanckOPLMap, where the key is the species name and the value is a
+                // vector of doubles.
+                PlanckOPLMap[name] = data["radiation"]["data"].asVector<double>();
+            } else {
+                throw InputFileError("Flow1D::Flow1D", data,
+                "No data entry found species '{}'", name);
+            }
+        }
+    }
+
+    // This map is built from the AbsorptionSpeciesList and is a map of the species names to
+    // the species index in the ThermoPhase object.
+    for(std::string spIter : AbsorptionSpeciesList) {
+        AbsorptionSpeciesMap.insert({spIter, m_thermo->speciesIndex(spIter)});
+    }
+
 }
 
 Flow1D::Flow1D(shared_ptr<ThermoPhase> th, size_t nsp, size_t points)
@@ -468,6 +525,8 @@ void Flow1D::computeRadiation(double* x, size_t jmin, size_t jmax)
     // radiation calculation:
     double k_P_ref = 1.0*OneAtm;
 
+    double coef = 0.0;
+
     // Polynomial coefficients:
     const double c_H2O[6] = {-0.23093, -1.12390, 9.41530, -2.99880,
                                     0.51382, -1.86840e-5};
@@ -479,25 +538,45 @@ void Flow1D::computeRadiation(double* x, size_t jmin, size_t jmax)
     double boundary_Rad_right = m_epsilon_right * StefanBoltz * pow(T(x, m_points - 1), 4);
 
     for (size_t j = jmin; j < jmax; j++) {
+
         // calculation of the mean Planck absorption coefficient
         double k_P = 0;
-        // Absorption coefficient for H2O
-        if (m_kRadiating[1] != npos) {
-            double k_P_H2O = 0;
-            for (size_t n = 0; n <= 5; n++) {
-                k_P_H2O += c_H2O[n] * pow(1000 / T(x, j), (double) n);
+
+        for(std::string sp_name : AbsorptionSpeciesList) {
+            // temperature table interval search
+            int T_index = 0;
+            const int OPL_table_size = TemperatureOPLMap[sp_name].size();
+            for (int k = 0; k < OPL_table_size; k++) {
+                if (T(x, j) < TemperatureOPLMap[sp_name][k]) {
+                    if (T(x, j) < TemperatureOPLMap[sp_name][0]) {
+                        T_index = 0; //lower table limit
+                    }
+                    else {
+                        T_index = k;
+                    }
+                    break;
+                }
+                else {
+                    T_index=OPL_table_size-1; //upper table limit
+                }
             }
-            k_P_H2O /= k_P_ref;
-            k_P += m_press * X(x, m_kRadiating[1], j) * k_P_H2O;
-        }
-        // Absorption coefficient for CO2
-        if (m_kRadiating[0] != npos) {
-            double k_P_CO2 = 0;
-            for (size_t n = 0; n <= 5; n++) {
-                k_P_CO2 += c_CO2[n] * pow(1000 / T(x, j), (double) n);
+
+            // absorption coefficient for specie
+            if (AbsorptionSpeciesMap[sp_name] != npos) {
+                double k_P_specie = 0.0;
+                if ((T_index == 0) || (T_index == OPL_table_size-1)) {
+                    coef=log(1.0/PlanckOPLMap[sp_name][T_index]);
+                }
+                else {
+                    coef=log(1.0/PlanckOPLMap[sp_name][T_index-1])+
+                    (log(1.0/PlanckOPLMap[sp_name][T_index])-log(1.0/PlanckOPLMap[sp_name][T_index-1]))*
+                    (T(x, j)-TemperatureOPLMap[sp_name][T_index-1])/(TemperatureOPLMap[sp_name][T_index]-TemperatureOPLMap[sp_name][T_index-1]);
+                }
+                k_P_specie = exp(coef);
+
+                k_P_specie /= k_P_ref;
+                k_P += m_press * X(x, AbsorptionSpeciesMap[sp_name], j) * k_P_specie;
             }
-            k_P_CO2 /= k_P_ref;
-            k_P += m_press * X(x, m_kRadiating[0], j) * k_P_CO2;
         }
 
         // Calculation of the radiative heat loss term
