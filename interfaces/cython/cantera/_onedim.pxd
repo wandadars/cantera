@@ -134,6 +134,7 @@ cdef extern from "cantera/oneD/Sim1D.h":
         shared_ptr[CxxSystemJacobian] linearSolver()
         void getInitialSoln() except +translate_exception
         void solve(int, cbool) except +translate_exception
+        void automaticSolve(int, cbool) except +translate_exception
         void refine(int) except +translate_exception
         void setRefineCriteria(size_t, double, double, double, double) except +translate_exception
         vector[double] getRefineCriteria(int) except +translate_exception

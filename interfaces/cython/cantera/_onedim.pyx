@@ -1335,22 +1335,33 @@ cdef class Sim1D:
         return False
 
     def solve(self, loglevel=1, refine_grid=True, auto=False):
-        """
-        Solve the problem.
+         """
+        Solve the 1D problem.
 
-        :param loglevel:
-            integer flag controlling the amount of diagnostic output. Zero
-            suppresses all output, and 5 produces very verbose output.
-        :param refine_grid:
-            if True, enable grid refinement.
-        :param auto: if True, sequentially execute the different solution stages
-            and attempt to automatically recover from errors. Attempts to first
-            solve on the initial grid with energy enabled. If that does not
-            succeed, a fixed-temperature solution will be tried followed by
-            enabling the energy equation, and then with grid refinement enabled.
-            If non-default tolerances have been specified or multicomponent
-            transport is enabled, an additional solution using these options
-            will be calculated.
+        Parameters
+        ----------
+        loglevel : int, default 1
+            0 = silent, 1–4 = verbose, 5 = very verbose.
+        refine_grid : bool, default True
+            Enable adaptive grid refinement.
+        auto : bool, default False
+            Use a staged solve for difficult flames: relax tolerances, disable Soret,
+            switch to mixture-averaged transport, try coarse-to-fine grids with a
+            fixed-temperature fallback, then restore the user's original options.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        CanteraError
+            If no converged (non-extinct) solution is found.
+
+        Notes
+        -----
+        With ``auto=False``, performs one solve on the current grid using the
+        current options.
         """
 
         if not auto:
@@ -1359,171 +1370,7 @@ cdef class Sim1D:
             self.sim.solve(loglevel, <cbool>refine_grid)
             return
 
-        def set_transport(multi):
-            for dom in self.domains:
-                if isinstance(dom, FlowBase):
-                    dom.transport_model = multi
-
-        # Do initial solution steps with default tolerances
-        have_user_tolerances = any(dom.have_user_tolerances for dom in self.domains)
-        if have_user_tolerances:
-            # Save the user-specified tolerances
-            atol_ss_final = [dom.steady_abstol() for dom in self.domains]
-            rtol_ss_final = [dom.steady_reltol() for dom in self.domains]
-            atol_ts_final = [dom.transient_abstol() for dom in self.domains]
-            rtol_ts_final = [dom.transient_reltol() for dom in self.domains]
-
-        def restore_tolerances():
-            if have_user_tolerances:
-                for i in range(len(self.domains)):
-                    self.domains[i].set_steady_tolerances(abs=atol_ss_final[i],
-                                                        rel=rtol_ss_final[i])
-                    self.domains[i].set_transient_tolerances(abs=atol_ts_final[i],
-                                                            rel=rtol_ts_final[i])
-
-        for dom in self.domains:
-            dom.set_default_tolerances()
-
-        # Do initial steps without Soret diffusion
-        soret_doms = [dom for dom in self.domains if getattr(dom, 'soret_enabled', False)]
-
-        def set_soret(soret):
-            for dom in soret_doms:
-                dom.soret_enabled = soret
-
-        set_soret(False)
-
-        # Do initial solution steps without multicomponent transport
-        transport = self.transport_model
-        solve_multi = self.transport_model == 'multicomponent'
-        if solve_multi:
-            set_transport('mixture-averaged')
-
-        def log(msg, *args):
-            if loglevel:
-                print('\n{:*^78s}'.format(' ' + msg.format(*args) + ' '))
-
-        flow_domains = [D for D in self.domains if isinstance(D, FlowBase)]
-        zmin = [D.grid[0] for D in flow_domains]
-        zmax = [D.grid[-1] for D in flow_domains]
-
-        # 'data' entry is used for restart
-        data = self._initial_guess_kwargs.get('data')
-        if data is not None:
-           nPoints = [len(flow_domains[0].grid)]
-        else:
-           nPoints = [len(flow_domains[0].grid), 12, 24, 48]
-
-        for N in nPoints:
-            for i,D in enumerate(flow_domains):
-                if N > self.get_max_grid_points(D):
-                    raise CanteraError('Maximum number of grid points exceeded')
-
-                if N != len(D.grid):
-                    D.grid = np.linspace(zmin[i], zmax[i], N)
-
-            if data is None:
-                self.set_initial_guess(*self._initial_guess_args,
-                                       **self._initial_guess_kwargs)
-
-            # Try solving with energy enabled, which usually works
-            log('Solving on {} point grid with energy equation enabled', N)
-            self.energy_enabled = True
-            try:
-                self.sim.solve(loglevel, <cbool>False)
-                solved = True
-            except CanteraError as e:
-                log(str(e))
-                solved = False
-            except Exception as e:
-                # restore settings before re-raising exception
-                set_transport(transport)
-                set_soret(True)
-                restore_tolerances()
-                raise e
-
-            # If initial solve using energy equation fails, fall back on the
-            # traditional fixed temperature solve followed by solving the energy
-            # equation
-            if not solved or self.extinct():
-                if self.extinct():
-                    self.set_initial_guess(*self._initial_guess_args,
-                                           **self._initial_guess_kwargs)
-                log('Initial solve failed; Retrying with energy equation disabled')
-                self.energy_enabled = False
-                try:
-                    self.sim.solve(loglevel, <cbool>False)
-                    solved = True
-                except CanteraError as e:
-                    log(str(e))
-                    solved = False
-                except Exception as e:
-                    # restore settings before re-raising exception
-                    set_transport(transport)
-                    set_soret(True)
-                    restore_tolerances()
-                    raise e
-
-                if solved:
-                    log('Solving on {} point grid with energy equation re-enabled', N)
-                    self.energy_enabled = True
-                    try:
-                        self.sim.solve(loglevel, <cbool>False)
-                        solved = True
-                    except CanteraError as e:
-                        log(str(e))
-                        solved = False
-                    except Exception as e:
-                        # restore settings before re-raising exception
-                        set_transport(transport)
-                        set_soret(True)
-                        restore_tolerances()
-                        raise e
-
-            if solved and not self.extinct() and refine_grid:
-                # Found a non-extinct solution on the fixed grid
-                log('Solving with grid refinement enabled')
-                try:
-                    self.sim.solve(loglevel, <cbool>True)
-                    solved = True
-                except CanteraError as e:
-                    log(str(e))
-                    solved = False
-                except Exception as e:
-                    # restore settings before re-raising exception
-                    set_transport(transport)
-                    set_soret(True)
-                    restore_tolerances()
-                    raise e
-
-                if solved and not self.extinct():
-                    # Found a non-extinct solution on the refined grid
-                    break
-
-            if self.extinct():
-                log('Flame is extinct on {} point grid', N)
-
-            if not refine_grid:
-                break
-
-        if not solved:
-            raise CanteraError('Could not find a solution for the 1D problem')
-
-        if solve_multi:
-            log('Solving with multicomponent transport')
-            set_transport('multicomponent')
-
-        if soret_doms:
-            log('Solving with Soret diffusion')
-            set_soret(True)
-
-        if have_user_tolerances:
-            log('Solving with user-specified tolerances')
-            restore_tolerances()
-
-        # Final call with expensive options enabled
-        if have_user_tolerances or solve_multi or soret_doms:
-            self.sim.solve(loglevel, <cbool>refine_grid)
+        self.sim.automaticSolve(loglevel, <cbool>refine_grid)
 
     def refine(self, loglevel=1):
         """

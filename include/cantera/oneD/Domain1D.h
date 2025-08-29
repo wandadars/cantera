@@ -290,6 +290,24 @@ public:
      */
     void setSteadyTolerances(double rtol, double atol, size_t n=npos);
 
+    //! Return all default tolerances
+    virtual vector<double> getDefaultTolerances() {
+        return {
+            m_rtol_ss_default,
+            m_atol_ss_default,
+            m_rtol_ss_default,
+            m_atol_ts_default
+        };
+    }
+
+    //! Set default tolerances for component n
+    void setDefaultTolerances(size_t n) {
+        m_rtol_ss[n] = m_rtol_ss_default;
+        m_atol_ss[n] = m_atol_ss_default;
+        m_rtol_ts[n] = m_rtol_ts_default;
+        m_atol_ts[n] = m_atol_ts_default;
+    }
+
     //! Relative tolerance of the nth component.
     double rtol(size_t n) {
         return (m_rdt == 0.0 ? m_rtol_ss[n] : m_rtol_ts[n]);
@@ -814,9 +832,13 @@ protected:
     vector<double> m_max; //!< Upper bounds on solution components
     vector<double> m_min; //!< Lower bounds on solution components
     vector<double> m_rtol_ss; //!< Relative tolerances for steady mode
+    double m_rtol_ss_default = 1e-4; //!< Default relative tolerance for steady mode
     vector<double> m_rtol_ts; //!< Relative tolerances for transient mode
+    double m_rtol_ts_default = 1e-4; //!< Default relative tolerance for transient mode
     vector<double> m_atol_ss; //!< Absolute tolerances for steady mode
+    double m_atol_ss_default = 1e-9; //!< Default absolute tolerance for steady mode
     vector<double> m_atol_ts; //!< Absolute tolerances for transient mode
+    double m_atol_ts_default = 1e-11; //!< Default absolute tolerance for transient mode
     vector<double> m_z; //!< 1D spatial grid coordinates
 
     //! Parent OneDim simulation containing this and adjacent domains

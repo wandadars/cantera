@@ -832,6 +832,21 @@ void Flow1D::evalElectricField(double* x, double* rsd, int* diag,
     }
 }
 
+bool Flow1D::isExtinct() const {
+    // Let's look at the maximum temperature in the domain or the maximum heat release in the domain
+
+    double heat_release_cutoff = 1.0;
+
+    double max_heat_release = 0.0;
+    for (size_t j = 0; j < m_points; j++) {
+        for (size_t k = 0; k < m_nsp; k++) {
+            max_heat_release = std::max(max_heat_release, m_wdot(k, j));
+        }
+    }
+
+    return max_heat_release < heat_release_cutoff;
+}
+
 void Flow1D::show(const double* x)
 {
     writelog("    Pressure:  {:10.4g} Pa\n", m_press);

@@ -62,10 +62,10 @@ void Domain1D::resize(size_t nv, size_t np)
     m_max.resize(m_nv, 0.0);
     m_min.resize(m_nv, 0.0);
     // Default error tolerances for all domains
-    m_rtol_ss.resize(m_nv, 1.0e-4);
-    m_atol_ss.resize(m_nv, 1.0e-9);
-    m_rtol_ts.resize(m_nv, 1.0e-4);
-    m_atol_ts.resize(m_nv, 1.0e-11);
+    m_rtol_ss.resize(m_nv, m_rtol_ss_default);
+    m_atol_ss.resize(m_nv, m_atol_ss_default);
+    m_rtol_ts.resize(m_nv, m_rtol_ts_default);
+    m_atol_ts.resize(m_nv, m_atol_ts_default);
     m_points = np;
     m_z.resize(np, 0.0);
     m_slast.resize(m_nv * m_points, 0.0);

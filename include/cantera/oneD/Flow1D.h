@@ -450,6 +450,8 @@ public:
         return m_kExcessRight;
     }
 
+    bool isExtinct() const;
+
 protected:
     AnyMap getMeta() const override;
     void setMeta(const AnyMap& state) override;
