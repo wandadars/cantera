@@ -832,20 +832,82 @@ void Flow1D::evalElectricField(double* x, double* rsd, int* diag,
     }
 }
 
-bool Flow1D::isExtinct() const {
-    // Let's look at the maximum temperature in the domain or the maximum heat release in the domain
+bool Flow1D::isExtinct() const
+{
+    // If the energy equation is disabled everywhere, we cannot assess an
+    // adiabatic flame's extinction state here; the caller will typically be
+    // in a fixed-temperature stage. Return false in that case.
+    const bool anyEnergy =
+        std::find(m_do_energy.begin(), m_do_energy.end(), true) != m_do_energy.end();
+    if (!anyEnergy || m_points < 2) {
+        return false;
+    }
 
-    double heat_release_cutoff = 1.0;
+    // Use the last finalized temperature profile. When energy is enabled,
+    // _finalize(...) stores T(x,j) in m_fixedtemp[j].
+    const size_t n = m_points;
 
-    double max_heat_release = 0.0;
-    for (size_t j = 0; j < m_points; j++) {
-        for (size_t k = 0; k < m_nsp; k++) {
-            max_heat_release = std::max(max_heat_release, m_wdot(k, j));
+    // Average a few points at each boundary to reduce noise. Use up to 5 points,
+    // or 10% of the grid, whichever is smaller (but at least 1).
+    const size_t nEdge = std::max<size_t>(1, std::min<size_t>(5, n / 10));
+
+    auto avg = [](const double* a, size_t m) -> double {
+        double s = 0.0;
+        for (size_t i = 0; i < m; ++i) {
+            s += a[i];
+        }
+        return s / std::max<size_t>(m, 1);
+    };
+
+    const double Tleft  = avg(m_fixedtemp.data(), nEdge);
+    const double Tright = avg(m_fixedtemp.data() + (n - nEdge), nEdge);
+    const double Tref   = std::min(Tleft, Tright); // cooler boundary ~ unburned side
+
+    // Peak temperature in the domain
+    double Tpeak = m_fixedtemp[0];
+    for (size_t j = 1; j < n; ++j) {
+        if (m_fixedtemp[j] > Tpeak) {
+            Tpeak = m_fixedtemp[j];
         }
     }
 
-    return max_heat_release < heat_release_cutoff;
+    // Guard against uninitialized profiles (e.g., before a first finalize)
+    if (!(std::isfinite(Tref) && std::isfinite(Tpeak))) {
+        return false;
+    }
+
+    // ---- Primary criterion: insufficient temperature rise ------------------
+    // Typical premixed flames have ~1000 K rise; 100 K is a conservative floor.
+    constexpr double kDeltaTmin = 100.0; // [K]
+    const double dT = Tpeak - Tref;
+    if (dT < kDeltaTmin) {
+        return true;
+    }
+
+    // ---- Secondary (very weak) check: negligible chemical heat release -----
+    // If both the temperature rise is only marginal and the chemical source is
+    // tiny, also treat as extinct. We approximate q_chem ≈ -Σ_k( wdot_k * h_k ).
+    // This uses members already maintained by Flow1D; if never updated, values
+    // tend toward zero, so this *only* reinforces the "small dT" case.
+    double qchem_max = 0.0; // [W/m^3]
+    for (size_t j = 0; j < n; ++j) {
+        double sum = 0.0;
+        for (size_t k = 0; k < m_nsp; ++k) {
+            sum += m_wdot(k, j) * m_hk(k, j);
+        }
+        // Exothermic chemistry contributes positive heat ~ -sum
+        qchem_max = std::max(qchem_max, -sum);
+    }
+
+    // Flames often exhibit 1e6–1e8 W/m^3 peak q_chem; 1e4 is a safe "almost zero".
+    constexpr double kQdotMin = 1e4; // [W/m^3]
+    if (dT < 1.25 * kDeltaTmin && qchem_max < kQdotMin) {
+        return true;
+    }
+
+    return false;
 }
+
 
 void Flow1D::show(const double* x)
 {
