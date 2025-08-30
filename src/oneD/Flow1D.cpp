@@ -840,6 +840,7 @@ bool Flow1D::isExtinct() const
     const bool anyEnergy =
         std::find(m_do_energy.begin(), m_do_energy.end(), true) != m_do_energy.end();
     if (!anyEnergy || m_points < 2) {
+        writelog("Energy equation disabled or insufficient points; cannot assess extinction.\n");
         return false;
     }
 
@@ -847,21 +848,8 @@ bool Flow1D::isExtinct() const
     // _finalize(...) stores T(x,j) in m_fixedtemp[j].
     const size_t n = m_points;
 
-    // Average a few points at each boundary to reduce noise. Use up to 5 points,
-    // or 10% of the grid, whichever is smaller (but at least 1).
-    const size_t nEdge = std::max<size_t>(1, std::min<size_t>(5, n / 10));
-
-    auto avg = [](const double* a, size_t m) -> double {
-        double s = 0.0;
-        for (size_t i = 0; i < m; ++i) {
-            s += a[i];
-        }
-        return s / std::max<size_t>(m, 1);
-    };
-
-    const double Tleft  = avg(m_fixedtemp.data(), nEdge);
-    const double Tright = avg(m_fixedtemp.data() + (n - nEdge), nEdge);
-    const double Tref   = std::min(Tleft, Tright); // cooler boundary ~ unburned side
+    const double Tleft  = m_fixedtemp[0];
+    const double Tright = m_fixedtemp[n - 1];
 
     // Peak temperature in the domain
     double Tpeak = m_fixedtemp[0];
@@ -871,18 +859,12 @@ bool Flow1D::isExtinct() const
         }
     }
 
-    // Guard against uninitialized profiles (e.g., before a first finalize)
-    if (!(std::isfinite(Tref) && std::isfinite(Tpeak))) {
-        return false;
-    }
-
     // ---- Primary criterion: insufficient temperature rise ------------------
-    // Typical premixed flames have ~1000 K rise; 100 K is a conservative floor.
-    constexpr double kDeltaTmin = 100.0; // [K]
-    const double dT = Tpeak - Tref;
-    if (dT < kDeltaTmin) {
-        return true;
-    }
+    // Extinction criterion: require at least 10 K rise over the HOTTER boundary
+    constexpr double kDeltaTmin = 10.0; // [K]
+    const double ThotBoundary = (Tleft > Tright) ? Tleft : Tright;
+    const double dT_over_hot  = Tpeak - ThotBoundary;
+    writelog("Temperature rise over hotter boundary: {:g} K\n", dT_over_hot);
 
     // ---- Secondary (very weak) check: negligible chemical heat release -----
     // If both the temperature rise is only marginal and the chemical source is
@@ -901,7 +883,8 @@ bool Flow1D::isExtinct() const
 
     // Flames often exhibit 1e6–1e8 W/m^3 peak q_chem; 1e4 is a safe "almost zero".
     constexpr double kQdotMin = 1e4; // [W/m^3]
-    if (dT < 1.25 * kDeltaTmin && qchem_max < kQdotMin) {
+    writelog("Maximum chemical heat release rate: {:g} W/m^3\n", qchem_max);
+    if (dT_over_hot < kDeltaTmin && qchem_max < kQdotMin) {
         return true;
     }
 

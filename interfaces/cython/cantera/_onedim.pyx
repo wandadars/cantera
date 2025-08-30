@@ -1335,7 +1335,7 @@ cdef class Sim1D:
         return False
 
     def solve(self, loglevel=1, refine_grid=True, auto=False):
-         """
+        """
         Solve the 1D problem.
 
         Parameters

@@ -397,6 +397,9 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
     std::vector<std::pair<double,double>> zspan;
     std::vector<std::string> transport0;
     std::vector<bool> soret0;
+    // Snapshots of original per-point energy flags and grids for each Flow1D domain
+    std::vector<std::vector<bool>> energy0;
+    std::vector<std::vector<double>> zgrid0;
     std::vector<TolSnap> tol0(nDomains());
     bool any_flow = false, any_multi = false, any_soret = false;
 
@@ -417,6 +420,16 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
             soret0.push_back(f->withSoret());
             any_soret = any_soret || f->withSoret();
             any_multi = any_multi || (f->transportModel() == "multicomponent");
+
+            // Snapshot per-point energy flags and original grids
+            std::vector<bool> eflags(np);
+            std::vector<double> zg(np);
+            for (size_t j = 0; j < np; ++j) {
+                eflags[j] = f->doEnergy(j);
+                zg[j] = d.z(j);
+            }
+            energy0.push_back(std::move(eflags));
+            zgrid0.push_back(std::move(zg));
         }
     }
     if (!any_flow) {
@@ -483,22 +496,91 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
         }
     };
 
+    // Restore original per-point energy flags for each Flow1D domain.
+    // If grid changed, map by nearest original grid location.
+    auto restore_energy_flags = [&]() {
+        for (size_t k = 0; k < flow_dom.size(); ++k) {
+            const size_t n = flow_dom[k];
+            Domain1D& d = domain(n);
+            auto* f = dynamic_cast<Flow1D*>(&d);
+            if (!f) {
+                continue;
+            }
+            const auto& z0 = zgrid0[k];
+            const auto& e0 = energy0[k];
+            const size_t np = d.nPoints();
+            const size_t iT = find_T_index(d);
+
+            // Enable energy everywhere first, then selectively disable
+            f->solveEnergyEqn(npos);
+            for (size_t j = 0; j < np; ++j) {
+                // Find nearest original grid point
+                double zj = d.z(j);
+                size_t i_near = 0;
+                double dzmin = std::numeric_limits<double>::infinity();
+                for (size_t i = 0; i < z0.size(); ++i) {
+                    double dz = std::abs(z0[i] - zj);
+                    if (dz < dzmin) {
+                        dzmin = dz;
+                        i_near = i;
+                    }
+                }
+                if (i_near < e0.size() && !e0[i_near]) {
+                    // Restore fixed-T at this point using current temperature
+                    double Tj = (iT == npos) ? 0.0 : value(n, iT, j);
+                    f->setTemperature(j, Tj);
+                }
+            }
+        }
+    };
+
+    // At top of automaticSolve(), after collecting flow_dom:
+    auto all_extinct = [&]() -> bool {
+        if (flow_dom.empty()) {
+            return false;
+        }
+        bool all_ext = true;
+        for (auto n : flow_dom) {
+            auto* f = dynamic_cast<Flow1D*>(&domain(n));
+            if (!f) continue;
+            all_ext = all_ext && f->isExtinct();
+        }
+        return all_ext;
+    };
+
 
 
     // --- Preparation --------------------------------------------------------
 
     // 1) Use default tolerances for initial stages
+    bool have_user_tolerances = false;
     for (size_t n = 0; n < nDomains(); ++n) {
-        domain(n).setDefaultTolerances(n);
+        Domain1D& d = domain(n);
+        const auto& a = tol0[n];
+        const auto& b = d.getDefaultTolerances();
+        if (a.ss_abs != b[1] || a.ss_rel != b[0]
+            || a.ts_abs != b[3] || a.ts_rel != b[2]) {
+            have_user_tolerances = true;
+            break;
+        }
+    }
+    if (have_user_tolerances) { // Only do this if user has set tolerances
+        log_section("Setting default tolerances for all domains");
+        for (size_t n = 0; n < nDomains(); ++n) {
+            domain(n).setDefaultTolerances(n);
+        }
     }
 
     // 2) Disable Soret
+    log_section("Disabling Soret diffusion");
     for (size_t k = 0; k < flow_dom.size(); ++k) {
-        auto* f = dynamic_cast<Flow1D*>(&domain(flow_dom[k]));
-        f->enableSoret(false);
+        if (soret0[k]) {
+            dynamic_cast<Flow1D&>(domain(flow_dom[k])).enableSoret(false);
+        }
     }
 
     // 3) Force mixture‑averaged if user requested multicomponent
+    log_section("Using mixture-averaged transport");
     if (any_multi) {
         for (size_t k = 0; k < flow_dom.size(); ++k) {
             auto* f = dynamic_cast<Flow1D*>(&domain(flow_dom[k]));
@@ -532,7 +614,7 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
             dynamic_cast<Flow1D&>(domain(n)).solveEnergyEqn(npos);
         }
         try {
-            this->solve(loglevel, /*refine*/ false);
+            this->solve(loglevel, false);
             solved = true;
         } catch (const CanteraError& e) {
             if (loglevel > 0) writelog("{}\n", e.what());
@@ -540,14 +622,17 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
         }
 
         // If failed, do fixed‑T fallback then re‑enable energy
-        if (!solved /*|| extinct()*/) {
+        if (!solved || all_extinct()) {
+            if (all_extinct()) {
+                log_section("Flame is extinct on " + std::to_string(N) + " point grid");
+            }
             set_fixed_T_profiles();
             log_section("Initial solve failed; retrying with energy equation disabled");
             for (auto n : flow_dom) {
                 dynamic_cast<Flow1D&>(domain(n)).fixTemperature(npos);
             }
             try {
-                this->solve(loglevel, /*refine*/ false);
+                this->solve(loglevel, false);
                 solved = true;
             } catch (const CanteraError& e) {
                 if (loglevel > 0) writelog("{}\n", e.what());
@@ -561,7 +646,7 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
                     dynamic_cast<Flow1D&>(domain(n)).solveEnergyEqn(npos);
                 }
                 try {
-                    this->solve(loglevel, /*refine*/ false);
+                    this->solve(loglevel, false);
                     solved = true;
                 } catch (const CanteraError& e) {
                     if (loglevel > 0) writelog("{}\n", e.what());
@@ -574,7 +659,7 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
         if (solved && refine_grid) {
             log_section("Solving with grid refinement enabled");
             try {
-                this->solve(loglevel, /*refine*/ true);
+                this->solve(loglevel, true);
                 solved = true;
             } catch (const CanteraError& e) {
                 if (loglevel > 0) writelog("{}\n", e.what());
@@ -592,8 +677,8 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
             auto* f = dynamic_cast<Flow1D*>(&domain(flow_dom[k]));
             f->setTransportModel(transport0[k]);
             f->enableSoret(soret0[k]);
-            f->solveEnergyEqn(npos);
         }
+        restore_energy_flags();
         for (size_t n = 0; n < nDomains(); ++n) {
             domain(n).setSteadyTolerances(tol0[n].ss_abs, tol0[n].ss_rel);
             domain(n).setTransientTolerances(tol0[n].ts_abs, tol0[n].ts_rel);
@@ -614,24 +699,27 @@ void Sim1D::automaticSolve(int loglevel, bool refine_grid)
     }
 
     if (any_soret) {
-        log_section("Solving with Soret diffusion");
-        for (auto n : flow_dom) {
-            dynamic_cast<Flow1D&>(domain(n)).enableSoret(true);
+    log_section("Solving with Soret diffusion");
+    for (size_t k = 0; k < flow_dom.size(); ++k) {
+        if (soret0[k]) {
+            dynamic_cast<Flow1D&>(domain(flow_dom[k])).enableSoret(true);
+        }
+    }
+    this->solve(loglevel, refine_grid);
+}
+
+    if (have_user_tolerances) {
+        log_section("Solving with user-specified tolerances");
+        for (size_t n = 0; n < nDomains(); ++n) {
+            domain(n).setSteadyTolerances(tol0[n].ss_abs, tol0[n].ss_rel);
+            domain(n).setTransientTolerances(tol0[n].ts_abs, tol0[n].ts_rel);
         }
         this->solve(loglevel, refine_grid);
     }
 
-    log_section("Solving with user-specified tolerances");
-    for (size_t n = 0; n < nDomains(); ++n) {
-        domain(n).setSteadyTolerances(tol0[n].ss_abs, tol0[n].ss_rel);
-        domain(n).setTransientTolerances(tol0[n].ts_abs, tol0[n].ts_rel);
-    }
-    this->solve(loglevel, refine_grid);
 
-    // ensure energy eqn is on at exit
-    for (auto n : flow_dom) {
-        dynamic_cast<Flow1D&>(domain(n)).solveEnergyEqn(npos);
-    }
+    // Restore original per-point energy settings before returning
+    restore_energy_flags();
 
 }
 

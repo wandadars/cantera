@@ -292,12 +292,9 @@ public:
 
     //! Return all default tolerances
     virtual vector<double> getDefaultTolerances() {
-        return {
-            m_rtol_ss_default,
-            m_atol_ss_default,
-            m_rtol_ss_default,
-            m_atol_ts_default
-        };
+        return { m_rtol_ss_default, m_atol_ss_default, m_rtol_ts_default,
+                m_atol_ts_default
+               };
     }
 
     //! Set default tolerances for component n
