@@ -110,9 +110,13 @@ void SteadyStateSystem::solve(int loglevel)
 
 double SteadyStateSystem::timeStepIncreaseFactor(double* x_before, double* x_after)
 {
-    int heuristic = 2; // Can be 1-4
+    if (!m_adaptive_tstep_growth) {
+        return m_tstep_growth;
+    }
+
+    int heuristic = m_tstep_growth_heuristic; // Can be 1-4
     m_work1.resize(m_size);
-    const double grow_factor = 1.25;
+    const double grow_factor = m_tstep_growth;
 
     if (heuristic == 1) {
         // Steady-state residual gate. If the steady-state residual decreased, allow
@@ -134,7 +138,7 @@ double SteadyStateSystem::timeStepIncreaseFactor(double* x_before, double* x_aft
         if (!(ts_after > 0.0) || !(ts_before > ts_after)) {
             return 1.0;
         }
-        const double max_growth = 1.5;
+        const double max_growth = m_tstep_growth;
         const double exponent = 0.2;
         double ratio = ts_before / ts_after;
         double factor = std::pow(ratio, exponent);
@@ -145,7 +149,7 @@ double SteadyStateSystem::timeStepIncreaseFactor(double* x_before, double* x_aft
         const int max_iters_for_growth = 3;
         return (newton().lastIterations() <= max_iters_for_growth) ? grow_factor : 1.0;
     }
-    return 1.0;
+    return m_tstep_growth;
 }
 
 double SteadyStateSystem::timeStep(int nsteps, double dt, double* x, double* r, int loglevel)
@@ -314,7 +318,7 @@ void SteadyStateSystem::initTimeInteg(double dt, double* x)
     m_rdt = 1.0/dt;
 
     // if the stepsize has changed, then update the transient part of the Jacobian
-    if (fabs(rdt_old - m_rdt) > Tiny && m_jac_ok) {
+    if (fabs(rdt_old - m_rdt) > Tiny) {
         m_jac->updateTransient(m_rdt, m_mask.data());
     }
 }
